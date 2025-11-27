@@ -1,0 +1,5 @@
+{
+  "name": "ConfocalAligner Pro",
+  "description": "A scientific image adjustment and arrangement tool for confocal microscopy, replacing manual ImageJ workflows with automated ROI detection and standardized layout generation.",
+  "requestFramePermissions": []
+}
