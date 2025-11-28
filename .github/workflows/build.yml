@@ -1,0 +1,48 @@
+name: Build Windows Exe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Dependencies
+        run: npm install
+
+      # THIS STEP FIXES YOUR ERROR AUTOMATICALLY
+      - name: Fix Config and ID
+        shell: bash
+        run: |
+          # Change the App ID from default to a unique one
+          sed -i 's/"identifier": "com.tauri.dev"/"identifier": "com.confocal.pro"/' src-tauri/tauri.conf.json
+          
+          # Fix potential version mismatch in Rust files
+          cd src-tauri
+          cargo update
+
+      - name: Build App
+        run: |
+          npm run build --if-present
+          npx tauri build
+        env:
+          VITE_GOOGLE_AI_STUDIO_API_KEY: "" 
+
+      - name: Upload Exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: Confocal-Pro-Windows
+          path: src-tauri/target/release/confocal-pro.exe
