@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Plus, Download, Image as ImageIcon, Microscope, Settings2, 
   AlertCircle, Sliders, Scissors, Type, ChevronDown, ChevronRight,
-  Maximize2, MoveHorizontal, Layout, Zap, GripHorizontal, X
+  Maximize2, MoveHorizontal, Layout, Zap, GripHorizontal, X,
+  RotateCcw, RotateCw, Minus, PanelTopClose, PanelTopOpen
 } from 'lucide-react';
 import { RowControl } from './components/RowControl';
 import { ProcessedRow, ProcessingConfig } from './types';
@@ -54,8 +55,12 @@ const DraggablePanel = ({
 }: DraggablePanelProps) => {
     const [isDragging, setIsDragging] = useState(false);
     const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+    const [isMinimized, setIsMinimized] = useState(false);
 
     const handleMouseDown = (e: React.MouseEvent) => {
+        // Prevent drag if clicking buttons
+        if ((e.target as HTMLElement).closest('button')) return;
+        
         setIsDragging(true);
         setDragStart({
             x: e.clientX - position.x,
@@ -68,7 +73,6 @@ const DraggablePanel = ({
             if (isDragging) {
                 const newX = e.clientX - dragStart.x;
                 const newY = e.clientY - dragStart.y;
-                // Simple bounds checking
                 const boundedX = Math.max(0, Math.min(window.innerWidth - 320, newX));
                 const boundedY = Math.max(0, Math.min(window.innerHeight - 50, newY));
                 
@@ -94,7 +98,7 @@ const DraggablePanel = ({
     return (
         <div 
             style={{ left: position.x, top: position.y }}
-            className="fixed w-80 z-50 flex flex-col rounded-xl overflow-hidden shadow-2xl border border-neutral-700 bg-neutral-900/90 backdrop-blur-md"
+            className={`fixed w-80 z-50 flex flex-col rounded-xl overflow-hidden shadow-2xl border border-neutral-700 bg-neutral-900/90 backdrop-blur-md transition-all duration-200 ${isMinimized ? 'h-auto' : ''}`}
         >
             <div 
                 onMouseDown={handleMouseDown}
@@ -104,15 +108,21 @@ const DraggablePanel = ({
                     <Sliders size={14} />
                     SETTINGS INSPECTOR
                 </div>
-                <div className="flex gap-2">
-                    <div className="w-2 h-2 rounded-full bg-red-500/50" />
-                    <div className="w-2 h-2 rounded-full bg-yellow-500/50" />
-                    <div className="w-2 h-2 rounded-full bg-green-500/50" />
+                <div className="flex gap-2 items-center">
+                    <button 
+                        onClick={() => setIsMinimized(!isMinimized)}
+                        className="p-1 hover:bg-neutral-700 rounded text-neutral-400 hover:text-white transition-colors"
+                        title={isMinimized ? "Expand" : "Minimize"}
+                    >
+                        {isMinimized ? <Maximize2 size={12} /> : <Minus size={12} />}
+                    </button>
                 </div>
             </div>
-            <div className="max-h-[70vh] overflow-y-auto custom-scrollbar p-2">
-                {children}
-            </div>
+            {!isMinimized && (
+                <div className="max-h-[70vh] overflow-y-auto custom-scrollbar p-2 animate-in fade-in slide-in-from-top-2 duration-200">
+                    {children}
+                </div>
+            )}
         </div>
     );
 };
@@ -134,6 +144,12 @@ export default function App() {
 
   const [rows, setRows] = useState<ProcessedRow[]>([]);
   
+  // History State
+  const [history, setHistory] = useState<{
+    past: Array<{rows: ProcessedRow[], config: ProcessingConfig}>,
+    future: Array<{rows: ProcessedRow[], config: ProcessingConfig}>
+  }>({ past: [], future: [] });
+
   // UI State
   const [sidebarWidth, setSidebarWidth] = useState(400);
   const [isResizing, setIsResizing] = useState(false);
@@ -142,7 +158,68 @@ export default function App() {
     processing: true,
     typography: true
   });
-  const [panelPos, setPanelPos] = useState({ x: window.innerWidth - 340, y: 20 });
+  const [panelPos, setPanelPos] = useState({ x: window.innerWidth - 340, y: 70 });
+
+  // History Management
+  const pushToHistory = useCallback(() => {
+    setHistory(prev => {
+        // Create a snapshot. We strip processedCanvas to save memory/storage, 
+        // as it can be regenerated from imgData + config.
+        const currentSnapshot = {
+            rows: rows.map(r => ({ ...r, processedCanvas: null })),
+            config: { ...config }
+        };
+        const newPast = [...prev.past, currentSnapshot];
+        // Limit history to 30 steps
+        if (newPast.length > 30) newPast.shift();
+        
+        return {
+            past: newPast,
+            future: []
+        };
+    });
+  }, [rows, config]);
+
+  const undo = () => {
+    if (history.past.length === 0) return;
+    const previous = history.past[history.past.length - 1];
+    const newPast = history.past.slice(0, -1);
+    
+    // Save current to future
+    const currentSnapshot = {
+        rows: rows.map(r => ({ ...r, processedCanvas: null })),
+        config: { ...config }
+    };
+    
+    setHistory({
+        past: newPast,
+        future: [currentSnapshot, ...history.future]
+    });
+    
+    // Restore
+    setConfig(previous.config);
+    // Restoration of rows handles data, useEffect will handle canvas regeneration
+    setRows(previous.rows);
+  };
+
+  const redo = () => {
+    if (history.future.length === 0) return;
+    const next = history.future[0];
+    const newFuture = history.future.slice(1);
+    
+    const currentSnapshot = {
+        rows: rows.map(r => ({ ...r, processedCanvas: null })),
+        config: { ...config }
+    };
+
+    setHistory({
+        past: [...history.past, currentSnapshot],
+        future: newFuture
+    });
+
+    setConfig(next.config);
+    setRows(next.rows);
+  };
 
   // Resizing Logic
   const startResizing = useCallback(() => setIsResizing(true), []);
@@ -166,11 +243,23 @@ export default function App() {
   // Initialize with one empty row
   useEffect(() => {
     if (rows.length === 0) {
-      handleAddRow();
+      // No history push for initial load
+      const newRow: ProcessedRow = {
+        id: crypto.randomUUID(),
+        file1: null,
+        file2: null,
+        imgData1: null,
+        imgData2: null,
+        processedCanvas: null,
+        timestamp: Date.now(),
+        rowLabel: ''
+      };
+      setRows([newRow]);
     }
   }, []);
 
   const handleAddRow = () => {
+    pushToHistory();
     const newRow: ProcessedRow = {
       id: crypto.randomUUID(),
       file1: null,
@@ -185,10 +274,12 @@ export default function App() {
   };
 
   const handleRemoveRow = (id: string) => {
+    pushToHistory();
     setRows(prev => prev.filter(r => r.id !== id));
   };
 
   const handleUpdateRow = async (id: string, updates: Partial<ProcessedRow>) => {
+    // Don't push history here, handled in wrapper or specific calls to avoid dups
     setRows(prev => prev.map(r => {
       if (r.id === id) {
         return { ...r, ...updates };
@@ -219,6 +310,7 @@ export default function App() {
   };
 
   const handleSwap = (id: string) => {
+    pushToHistory();
     setRows(prev => prev.map(r => {
       if (r.id === id) {
         return {
@@ -233,21 +325,39 @@ export default function App() {
     }));
   };
 
-  // Main processing loop
+  // Main processing loop - Updates when Config changes
   useEffect(() => {
     setRows(prevRows => {
-      return prevRows.map((row, index) => {
+      let hasChanges = false;
+      const newRows = prevRows.map((row, index) => {
         if (row.imgData1 && row.imgData2) {
             const isFirstRow = index === 0;
-            const canvas = processRow(row.imgData1, row.imgData2, config, row.rowLabel, isFirstRow);
-            if (row.processedCanvas !== canvas) {
-                return { ...row, processedCanvas: canvas };
+            // Always regenerate logic to check if we need update (processRow is relatively fast for single row)
+            // Ideally we check if config changed, but this effect runs on config change.
+            const newCanvas = processRow(row.imgData1, row.imgData2, config, row.rowLabel, isFirstRow);
+            if (row.processedCanvas !== newCanvas) {
+                hasChanges = true;
+                return { ...row, processedCanvas: newCanvas };
             }
         }
         return row;
       });
+      return hasChanges ? newRows : prevRows;
     });
   }, [config]); 
+
+  // Restoration Repair Loop - Updates when Rows change (e.g. undo/redo) and canvas is missing
+  useEffect(() => {
+    const rowsNeedingProcess = rows.some((r, i) => r.imgData1 && r.imgData2 && !r.processedCanvas);
+    if (rowsNeedingProcess) {
+        setRows(prev => prev.map((r, i) => {
+            if (r.imgData1 && r.imgData2 && !r.processedCanvas) {
+                return { ...r, processedCanvas: processRow(r.imgData1, r.imgData2, config, r.rowLabel, i === 0) };
+            }
+            return r;
+        }));
+    }
+  }, [rows, config]);
 
   const updateRowWithProcess = (id: string, updates: Partial<ProcessedRow>) => {
       setRows(prev => {
@@ -270,30 +380,24 @@ export default function App() {
   };
 
   const handleUpdateRowSmart = (id: string, updates: Partial<ProcessedRow>) => {
+      // Save history for discrete updates (text typing handled here, debouncing history might be needed for heavy typers 
+      // but for scientific tool precise steps are better).
+      // However, we only push history if it's NOT a file load (file load is async and complex, handled separately or we push before)
+      // For text input, we push.
+      
+      // Note: For file drop, we handle history in the wrapper that calls this.
+      // For text input, we should probably push.
+      // To avoid duplicate history pushes, we rely on the caller or check update type.
+      // Simply: Push history before any state change.
+      
+      pushToHistory();
+
       if (updates.file1 || updates.file2) {
           handleUpdateRow(id, updates); 
           return;
       }
       updateRowWithProcess(id, updates);
   };
-
-  useEffect(() => {
-     if (rows.length > 0) {
-         const r = rows[0];
-         if (r.imgData1 && r.imgData2) {
-             setRows(prev => {
-                 const newRows = [...prev];
-                 if (newRows[0].imgData1 && newRows[0].imgData2) {
-                    newRows[0] = {
-                        ...newRows[0],
-                        processedCanvas: processRow(newRows[0].imgData1, newRows[0].imgData2, config, newRows[0].rowLabel, true)
-                    };
-                 }
-                 return newRows;
-             });
-         }
-     }
-  }, [rows.length]); 
 
   const handleDownload = () => {
     if (rows.length === 0) return;
@@ -351,6 +455,7 @@ export default function App() {
                         <div className="flex items-center gap-2">
                             <input 
                                 type="number" 
+                                onFocus={pushToHistory}
                                 value={config.targetWidth}
                                 onChange={(e) => setConfig(prev => ({ ...prev, targetWidth: parseInt(e.target.value) || 100 }))}
                                 className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:border-blue-500 outline-none transition-colors"
@@ -358,6 +463,7 @@ export default function App() {
                             <span className="text-neutral-600 text-xs">x</span>
                             <input 
                                 type="number" 
+                                onFocus={pushToHistory}
                                 value={config.targetHeight}
                                 onChange={(e) => setConfig(prev => ({ ...prev, targetHeight: parseInt(e.target.value) || 100 }))}
                                 className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:border-blue-500 outline-none transition-colors"
@@ -371,6 +477,7 @@ export default function App() {
                         </label>
                         <input 
                             type="number" 
+                            onFocus={pushToHistory}
                             value={config.clipBottom}
                             onChange={(e) => setConfig(prev => ({ ...prev, clipBottom: parseInt(e.target.value) || 0 }))}
                             className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:border-blue-500 outline-none transition-colors"
@@ -391,6 +498,7 @@ export default function App() {
                         <label className="block text-[10px] text-neutral-500 mb-1">Target Intensity</label>
                         <input 
                             type="number" 
+                            onFocus={pushToHistory}
                             value={config.targetIntensity}
                             onChange={(e) => setConfig(prev => ({ ...prev, targetIntensity: parseInt(e.target.value) || 0 }))}
                             className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:border-blue-500 outline-none"
@@ -404,6 +512,7 @@ export default function App() {
                         <input 
                             type="range" 
                             min="0" max="0.2" step="0.01"
+                            onPointerDown={pushToHistory}
                             value={config.randomness}
                             onChange={(e) => setConfig(prev => ({ ...prev, randomness: parseFloat(e.target.value) }))}
                             className="w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
@@ -423,7 +532,7 @@ export default function App() {
                      <div className="flex items-center justify-between">
                         <label className="text-[10px] text-neutral-500">Show Labels</label>
                         <button 
-                           onClick={() => setConfig(prev => ({ ...prev, showLabels: !prev.showLabels }))}
+                           onClick={() => { pushToHistory(); setConfig(prev => ({ ...prev, showLabels: !prev.showLabels })); }}
                            className={`w-8 h-4 rounded-full transition-colors relative ${config.showLabels ? 'bg-blue-600' : 'bg-neutral-700'}`}
                         >
                            <div className={`absolute top-0.5 left-0.5 w-3 h-3 bg-white rounded-full transition-transform ${config.showLabels ? 'translate-x-4' : 'translate-x-0'}`} />
@@ -433,6 +542,7 @@ export default function App() {
                      <div>
                         <label className="block text-[10px] text-neutral-500 mb-1">Font Family</label>
                         <select 
+                           onFocus={pushToHistory}
                            value={config.fontFamily}
                            onChange={(e) => setConfig(prev => ({ ...prev, fontFamily: e.target.value }))}
                            className="w-full bg-neutral-800 border border-neutral-700 rounded px-2 py-1 text-xs text-neutral-200 focus:border-blue-500 outline-none"
@@ -457,6 +567,7 @@ export default function App() {
                             <input 
                                 type="range" 
                                 min="12" max="64" step="2"
+                                onPointerDown={pushToHistory}
                                 value={config.rowLabelFontSize}
                                 onChange={(e) => setConfig(prev => ({ ...prev, rowLabelFontSize: parseInt(e.target.value) }))}
                                 className="w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
@@ -470,6 +581,7 @@ export default function App() {
                             <input 
                                 type="range" 
                                 min="12" max="64" step="2"
+                                onPointerDown={pushToHistory}
                                 value={config.columnLabelFontSize}
                                 onChange={(e) => setConfig(prev => ({ ...prev, columnLabelFontSize: parseInt(e.target.value) }))}
                                 className="w-full h-1 bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
@@ -482,6 +594,7 @@ export default function App() {
                              <input 
                                 key={idx}
                                 type="text"
+                                onFocus={pushToHistory}
                                 value={label}
                                 onChange={(e) => {
                                     const newLabels = [...config.columnLabels] as [string, string, string];
@@ -505,24 +618,44 @@ export default function App() {
       >
         {/* Header */}
         <div className="border-b border-neutral-800 bg-neutral-900/80 backdrop-blur-md sticky top-0 z-20 p-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-blue-600 rounded-lg shadow-lg shadow-blue-900/20">
                   <Microscope className="text-white" size={20} />
                 </div>
                 <div>
                   <h1 className="text-lg font-bold tracking-tight text-white leading-tight">ConfocalAligner</h1>
-                  <p className="text-[10px] text-neutral-400 font-mono">PRO EDITION v1.3</p>
+                  <p className="text-[10px] text-neutral-400 font-mono">PRO EDITION v1.4</p>
                 </div>
               </div>
-              <button 
-                  onClick={handleAddRow}
-                  className="flex items-center gap-2 bg-neutral-100 text-neutral-900 px-3 py-1.5 rounded-md font-medium hover:bg-white transition-colors text-xs shadow-lg shadow-white/10"
-              >
-                <Plus size={14} />
-                Add Row
-              </button>
+              
+              <div className="flex items-center gap-2">
+                  <button 
+                    onClick={undo}
+                    disabled={history.past.length === 0}
+                    className="p-1.5 text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400 transition-colors bg-neutral-800/50 rounded"
+                    title="Undo"
+                  >
+                    <RotateCcw size={14} />
+                  </button>
+                  <button 
+                    onClick={redo}
+                    disabled={history.future.length === 0}
+                    className="p-1.5 text-neutral-400 hover:text-white disabled:opacity-30 disabled:hover:text-neutral-400 transition-colors bg-neutral-800/50 rounded"
+                    title="Redo"
+                  >
+                    <RotateCw size={14} />
+                  </button>
+              </div>
             </div>
+
+            <button 
+                onClick={handleAddRow}
+                className="w-full flex items-center justify-center gap-2 bg-neutral-100 text-neutral-900 px-3 py-2 rounded-md font-medium hover:bg-white transition-colors text-xs shadow-lg shadow-white/10"
+            >
+              <Plus size={14} />
+              Add Experiment Row
+            </button>
         </div>
 
         {/* Row List */}
@@ -531,6 +664,7 @@ export default function App() {
              <div className="text-center py-20 text-neutral-600">
                 <ImageIcon className="mx-auto mb-4 opacity-20" size={48} />
                 <p className="text-sm">No rows added.</p>
+                <p className="text-xs text-neutral-700 mt-2">Click "Add Experiment Row" to begin</p>
              </div>
            )}
            {rows.map((row, idx) => (
@@ -564,7 +698,7 @@ export default function App() {
           <div className="flex items-center gap-4">
              <div className="text-xs text-neutral-500 flex items-center gap-1">
                 <AlertCircle size={12} />
-                <span>Auto-normalized</span>
+                <span>Auto-updating</span>
              </div>
              <button 
                 onClick={handleDownload}
