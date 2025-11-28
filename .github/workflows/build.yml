@@ -23,14 +23,13 @@ jobs:
       - name: Install Dependencies
         run: npm install
 
-      # THIS STEP FIXES YOUR ERROR AUTOMATICALLY
       - name: Fix Config and ID
         shell: bash
         run: |
-          # Change the App ID from default to a unique one
+          # Change the App ID to be unique
           sed -i 's/"identifier": "com.tauri.dev"/"identifier": "com.confocal.pro"/' src-tauri/tauri.conf.json
           
-          # Fix potential version mismatch in Rust files
+          # Update Rust dependencies
           cd src-tauri
           cargo update
 
@@ -44,5 +43,6 @@ jobs:
       - name: Upload Exe
         uses: actions/upload-artifact@v4
         with:
-          name: Confocal-Pro-Windows
-          path: src-tauri/target/release/confocal-pro.exe
+          name: Confocal-Pro-Installer
+          # THIS IS THE CORRECT PATH FROM YOUR LOGS
+          path: src-tauri/target/release/bundle/nsis/*.exe
